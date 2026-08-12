@@ -46,7 +46,6 @@ import {
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { chunkItems } from "openclaw/plugin-sdk/text-chunking";
-import { sanitizeSlackMonitorReplyPayload } from "./sanitize-monitor-reply.js";
 import type { ResolvedSlackAccount } from "../accounts.js";
 import { SLACK_MAX_BLOCKS } from "../blocks-input.js";
 import { formatSlackError } from "../errors.js";
@@ -71,6 +70,7 @@ import {
   isSlackResponseAlreadyReportedError,
 } from "./response-url-budget.js";
 import { resolveSlackRoomContextHints } from "./room-context.js";
+import { sanitizeSlackMonitorReplyPayload } from "./sanitize-monitor-reply.js";
 
 const SLACK_COMMAND_ARG_ACTION_ID = "openclaw_cmdarg";
 const SLACK_COMMAND_ARG_ACTION_LISTENER = /^openclaw_cmdarg/;

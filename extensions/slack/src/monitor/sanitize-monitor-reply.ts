@@ -1,4 +1,4 @@
-import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
+import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
 
@@ -17,7 +17,12 @@ export function sanitizeSlackMonitorReplyPayload(payload: ReplyPayload): ReplyPa
     return payload;
   }
   const nextPayload = { ...payload, text: text || undefined };
-  if (!text && !hasOutboundReplyContent(nextPayload, { trimText: true })) {
+  if (
+    !text &&
+    !resolveSendableOutboundReplyParts(nextPayload).hasMedia &&
+    !nextPayload.presentation &&
+    !nextPayload.interactive
+  ) {
     return null;
   }
   return nextPayload;
