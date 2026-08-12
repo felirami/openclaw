@@ -46,6 +46,7 @@ import {
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { chunkItems } from "openclaw/plugin-sdk/text-chunking";
+import { sanitizeSlackMonitorReplyPayload } from "./sanitize-monitor-reply.js";
 import type { ResolvedSlackAccount } from "../accounts.js";
 import { SLACK_MAX_BLOCKS } from "../blocks-input.js";
 import { formatSlackError } from "../errors.js";
@@ -852,12 +853,7 @@ export async function registerSlackMonitorSlashCommands(params: {
         },
         ctxPayload,
         replyPipeline: {
-          transformReplyPayload: (payload) => {
-            if (payload.isReasoning === true) {
-              return null;
-            }
-            return payload;
-          },
+          transformReplyPayload: (payload) => sanitizeSlackMonitorReplyPayload(payload),
         },
         dispatcherOptions: {
           // /login must expose its device code before the auth flow can finish. Other block

@@ -35,6 +35,7 @@ type RecordedWireCall = {
 type CapturedDispatcherOptions = {
   deliver: (payload: ReplyPayload, info: { kind: ReplyDispatchKind }) => Promise<unknown>;
   onError?: (err: unknown, info: { kind: string }) => Promise<void> | void;
+  transformReplyPayload?: (payload: ReplyPayload) => ReplyPayload | null;
   typingCallbacks?: {
     onReplyStart?: () => Promise<void>;
     onIdle?: () => void;
@@ -556,8 +557,14 @@ async function setupSlackTrace(
   }
 
   const deliver = async (payload: ReplyPayload, kind: ReplyDispatchKind) => {
+    const transformed = turn.options.transformReplyPayload
+      ? turn.options.transformReplyPayload(payload)
+      : payload;
+    if (!transformed) {
+      return;
+    }
     try {
-      await turn.options.deliver(payload, { kind });
+      await turn.options.deliver(transformed, { kind });
       traceState.counts[kind] += 1;
     } catch (err) {
       // Mirrors the reply dispatcher: failed deliveries report onError and are

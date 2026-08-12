@@ -25,6 +25,7 @@ import { resolveSlackThreadTargets } from "../../threading.js";
 import { normalizeSlackAllowOwnerEntry } from "../allow-list.js";
 import { resolveStorePath, updateLastRoute } from "../config.runtime.js";
 import { createSlackReplyDeliveryPlan } from "../replies.js";
+import { sanitizeSlackMonitorReplyPayload } from "../sanitize-monitor-reply.js";
 import {
   isSlackStreamingEnabled,
   resolveSlackDisableBlockStreaming,
@@ -193,12 +194,7 @@ export async function createSlackDispatchSetup(prepared: PreparedSlackMessage) {
     agentId: route.agentId,
     channel: "slack",
     accountId: route.accountId,
-    transformReplyPayload: (payload) => {
-      if (payload.isReasoning === true) {
-        return null;
-      }
-      return payload;
-    },
+    transformReplyPayload: (payload) => sanitizeSlackMonitorReplyPayload(payload),
     typing: {
       start: async () => {
         didSetStatus = true;

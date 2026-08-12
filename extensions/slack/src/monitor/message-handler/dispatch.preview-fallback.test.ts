@@ -2696,6 +2696,78 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     });
   });
 
+  it.each([
+    ["⚠️ 🛠️ Exec failed: ", "compact Exec failed"],
+    ["⚠️ 🛠️ `ls /tmp/missing` (agent) failed", "legacy agent-failed"],
+  ])("drops native-stream finals that are only %s traces", async (text) => {
+    mockedNativeStreaming = true;
+    mockedDispatchSequence = [{ kind: "final", payload: { text } }];
+
+    await dispatchPreparedSlackMessage(createPreparedSlackMessage());
+
+    expect(startSlackStreamMock).not.toHaveBeenCalled();
+    expect(deliverRepliesMock).not.toHaveBeenCalled();
+    expect(emitSlackMessageSentHooksMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps native-stream prose after stripping compact failure traces", async () => {
+    mockedNativeStreaming = true;
+    mockedDispatchSequence = [
+      {
+        kind: "final",
+        payload: {
+          text: "The directory is missing.\n⚠️ 🛠️ Exec failed: `ls /tmp/does-not-exist` (exit 2)",
+        },
+      },
+    ];
+
+    await dispatchPreparedSlackMessage(createPreparedSlackMessage());
+
+    expect(deliverRepliesMock).not.toHaveBeenCalled();
+    expect(startSlackStreamMock).toHaveBeenCalledTimes(1);
+    expectMockCallArgFields(startSlackStreamMock, 0, "native stream start", {
+      text: "The directory is missing.",
+    });
+  });
+
+  it("does not preview draft partials that are only compact failure traces", async () => {
+    const draftStream = createDraftStreamStub();
+    createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
+    mockedDispatchSequence = [];
+    mockedReplyOptionEvents = [
+      { kind: "partial", text: "⚠️ 🛠️ Exec failed: " },
+      { kind: "partial", text: "The path is missing." },
+    ];
+
+    await dispatchPreparedSlackMessage(createPreparedSlackMessage());
+
+    expect(draftUpdateTexts(draftStream)).toEqual(["The path is missing."]);
+  });
+
+  it("keeps media when a native-stream final sanitizes to empty text", async () => {
+    mockedNativeStreaming = true;
+    mockedDispatchSequence = [
+      {
+        kind: "final",
+        payload: {
+          text: "⚠️ 🛠️ Exec failed: ",
+          mediaUrl: "https://example.com/shot.png",
+        },
+      },
+    ];
+
+    await dispatchPreparedSlackMessage(createPreparedSlackMessage());
+
+    expect(startSlackStreamMock).not.toHaveBeenCalled();
+    const delivered = requireRecord(
+      requireMockCall(deliverRepliesMock, 0, "media-only replies")[0],
+      "media-only replies params",
+    );
+    expect(delivered.replies).toEqual([
+      { text: undefined, mediaUrl: "https://example.com/shot.png" },
+    ]);
+  });
+
   it("routes split table fallbacks around native text streaming", async () => {
     mockedNativeStreaming = true;
     const payload = {

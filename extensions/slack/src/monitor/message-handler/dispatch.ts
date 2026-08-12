@@ -31,6 +31,7 @@ import {
   type SlackStreamSession,
 } from "../../streaming.js";
 import { countSlackTextUtf8Bytes } from "../../truncate.js";
+import { sanitizeSlackMonitorDraftPartialText } from "../sanitize-monitor-reply.js";
 import { resolveSlackBotLoopProtection } from "./dispatch-helpers.js";
 import { createSlackProgressRuntime } from "./dispatch-progress.js";
 import { createSlackDispatchSetup } from "./dispatch-setup.js";
@@ -428,7 +429,9 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
           : !previewStreamingEnabled
             ? undefined
             : async (payload) => {
-                return progress.updateDraftFromPartial(payload.text);
+                return progress.updateDraftFromPartial(
+                  sanitizeSlackMonitorDraftPartialText(payload.text),
+                );
               },
         onAssistantMessageStart: progress.onDraftBoundary
           ? async () => {
