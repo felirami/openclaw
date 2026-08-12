@@ -22,7 +22,7 @@ import {
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { ReplyDispatchKind, ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
-import { afterAll, afterEach, describe, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import type { PreparedSlackMessage } from "./monitor/message-handler/types.js";
 
 type RecordedWireCall = {
@@ -166,12 +166,15 @@ type SlackTraceScenarioName =
   | "final-blocks-and-text"
   | "cancel-mid-stream"
   | "preview-edit-fallback"
-  | "progress-session-card";
+  | "progress-session-card"
+  | "native-prose-then-exec-failed"
+  | "preview-exec-failed-then-prose";
 
 const NATIVE_SCENARIOS = new Set<SlackTraceScenarioName>([
   "streaming-happy-native",
   "stream-stop-first-network-call",
   "final-blocks-and-text",
+  "native-prose-then-exec-failed",
 ]);
 
 // Long enough that the second stream append pushes the SDK buffer past
@@ -189,6 +192,12 @@ const SHORT_FINAL_TEXT = "All checks passed. Ship it.";
 const PREVIEW_PARTIAL_ONE = "Compiling the changelog";
 const PREVIEW_PARTIAL_TWO = "Compiling the changelog for 2026.1.0.";
 const PREVIEW_FINAL_TEXT = "Compiling the changelog for 2026.1.0.\n\nDone: 12 entries.";
+
+// Reported Slack streaming leak: a successful answer, then a separate compact
+// Exec-failed follow-up. The monitor transform must drop the follow-up on the
+// wire while still delivering the prose.
+const EXEC_FAILED_TRACE = "⚠️ 🛠️ Exec failed: ";
+const EXEC_FAILED_PROSE = "The directory is missing.";
 
 const BLOCKS_FINAL_TEXT = "Release 2026.1.0 is ready to ship.";
 // Portable presentation actions; slack renders them as Block Kit and must
@@ -261,6 +270,24 @@ const slackTraceScenarios: Record<SlackTraceScenarioName, readonly DeliveryTrace
     { kind: "tool-progress", name: "read", phase: "start" },
     { kind: "advance", ms: 2000 },
     { kind: "final", text: "The session card is complete." },
+    { kind: "idle" },
+  ],
+  // Native stream: answer first, then the compact failure as a second final.
+  // IN records both payloads; OUT must carry only the prose.
+  "native-prose-then-exec-failed": [
+    { kind: "reply-start" },
+    { kind: "final", text: EXEC_FAILED_PROSE },
+    { kind: "final", text: EXEC_FAILED_TRACE },
+    { kind: "idle" },
+  ],
+  // Draft preview: an Exec-failed partial must not post; later prose must.
+  "preview-exec-failed-then-prose": [
+    { kind: "reply-start" },
+    { kind: "partial", text: EXEC_FAILED_TRACE },
+    { kind: "advance", ms: 1100 },
+    { kind: "partial", text: EXEC_FAILED_PROSE },
+    { kind: "advance", ms: 1100 },
+    { kind: "final", text: EXEC_FAILED_PROSE },
     { kind: "idle" },
   ],
 };
@@ -631,7 +658,70 @@ async function setupSlackTrace(
   };
 }
 
+/** Visible Slack markdown/text from recorded Web API payloads. */
+function collectSlackWireTexts(events: readonly TraceEvent[]): string[] {
+  const texts: string[] = [];
+  const pushText = (value: unknown) => {
+    if (typeof value === "string" && value.length > 0) {
+      texts.push(value);
+    }
+  };
+  for (const event of events) {
+    if (event.dir !== "out" || !event.data || typeof event.data !== "object") {
+      continue;
+    }
+    const payload = (event.data as { payload?: unknown }).payload;
+    if (!payload || typeof payload !== "object") {
+      continue;
+    }
+    const record = payload as Record<string, unknown>;
+    pushText(record.text);
+    pushText(record.markdown_text);
+    if (!Array.isArray(record.chunks)) {
+      continue;
+    }
+    for (const chunk of record.chunks) {
+      if (chunk && typeof chunk === "object") {
+        pushText((chunk as { text?: unknown }).text);
+      }
+    }
+  }
+  return texts;
+}
+
+function buildSlackDeliveryProofVerdict(params: {
+  scenario: SlackTraceScenarioName;
+  events: readonly TraceEvent[];
+  headSha: string;
+}): Record<string, unknown> {
+  const wireTexts = collectSlackWireTexts(params.events);
+  const outEvents = params.events.filter((event) => event.dir === "out");
+  return {
+    kind: "mock-gateway",
+    liveSlack: false,
+    harness: "extensions/slack/src/delivery-trace.test.ts",
+    channel: "slack",
+    scenario: params.scenario,
+    headSha: params.headSha,
+    environment: {
+      node: process.version,
+      platform: process.platform,
+      slackApi: "recording WebClient",
+      provider: "scripted agent turn",
+      delivery: "real dispatchPreparedSlackMessage + ChatStreamer/draft preview",
+    },
+    inboundPayloads: params.events
+      .filter((event) => event.dir === "in" && (event.kind === "final" || event.kind === "partial"))
+      .map((event) => event.data),
+    deliveredWireTexts: wireTexts,
+    execFailedDelivered: wireTexts.some((text) => text.includes("Exec failed")),
+    proseDelivered: wireTexts.some((text) => text.includes(EXEC_FAILED_PROSE)),
+    outMethods: outEvents.map((event) => event.kind),
+  };
+}
+
 describe("slack delivery trace goldens", () => {
+  const headSha = process.env.OPENCLAW_DELIVERY_PROOF_SHA ?? "";
   for (const scenarioName of Object.keys(slackTraceScenarios) as SlackTraceScenarioName[]) {
     it(`records ${scenarioName}`, async () => {
       const events = await runDeliveryTraceScenario({
@@ -643,6 +733,19 @@ describe("slack delivery trace goldens", () => {
         goldenUrl: new URL(`./__traces__/${scenarioName}.trace.jsonl`, import.meta.url),
         events,
       });
+      const wireTexts = collectSlackWireTexts(events);
+      expect(wireTexts.join("\n")).not.toMatch(/Exec failed/i);
+      if (
+        scenarioName === "native-prose-then-exec-failed" ||
+        scenarioName === "preview-exec-failed-then-prose"
+      ) {
+        expect(wireTexts.some((text) => text.includes(EXEC_FAILED_PROSE))).toBe(true);
+        if (process.env.OPENCLAW_DELIVERY_PROOF === "1") {
+          process.stdout.write(
+            `${JSON.stringify(buildSlackDeliveryProofVerdict({ scenario: scenarioName, events, headSha }), null, 2)}\n`,
+          );
+        }
+      }
     });
   }
 });
