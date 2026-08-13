@@ -916,6 +916,67 @@ describe("loadConfigForInstall", () => {
     },
   );
 
+  it("allows recovery when the requested plugin's channel config fails the outgoing schema", async () => {
+    const snapshotCfg = {
+      plugins: { installs: { discord: { source: "npm", installPath: "/keep" } } },
+      channels: { discord: { legacyKey: true } },
+    } as unknown as OpenClawConfig;
+    readConfigFileSnapshotMock.mockResolvedValue(
+      makeSnapshot({
+        parsed: {
+          plugins: { installs: { discord: {} } },
+          channels: { discord: { legacyKey: true } },
+        },
+        config: snapshotCfg,
+        issues: [
+          {
+            path: "channels.discord",
+            message:
+              'invalid config for plugin discord: must not have additional properties: "legacyKey"',
+          },
+          {
+            path: "channels.discord.legacyKey",
+            message: "invalid config for plugin discord: must be object",
+          },
+        ],
+      }),
+    );
+
+    const result = await loadConfigForInstall(discordNpmRequest);
+    expect(result).toEqual({
+      config: snapshotCfg,
+      baseHash: "abc",
+      writeOptions: installWriteOptions,
+      hookMutation: { mode: "allowed" },
+      pluginMutation: { mode: "allowed" },
+    });
+  });
+
+  it("rejects another plugin's invalid channel schema during requested-plugin recovery", async () => {
+    readConfigFileSnapshotMock.mockResolvedValue(
+      makeSnapshot({
+        parsed: { plugins: { installs: { discord: {} } } },
+        config: { plugins: { installs: { discord: {} } } } as OpenClawConfig,
+        issues: [
+          {
+            path: "channels.discord",
+            message:
+              'invalid config for plugin discord: must not have additional properties: "legacyKey"',
+          },
+          {
+            path: "channels.telegram",
+            message:
+              'invalid config for plugin telegram: must not have additional properties: "legacyKey"',
+          },
+        ],
+      }),
+    );
+
+    await expect(loadConfigForInstall(discordNpmRequest)).rejects.toThrow(
+      "Config invalid outside the plugin recovery path for discord",
+    );
+  });
+
   it("rejects unrelated invalid config even during bundled-plugin reinstall recovery", async () => {
     readConfigFileSnapshotMock.mockResolvedValue(
       makeSnapshot({

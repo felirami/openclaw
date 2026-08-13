@@ -75,6 +75,25 @@ function isOwnedMissingPluginLoadPathIssue(
   return missingPath !== null && ownedLoadPaths.has(resolveUserPath(missingPath, env));
 }
 
+function isRequestedPluginChannelPath(path: string | undefined, pluginId: string): boolean {
+  const channelRoot = `channels.${pluginId}`;
+  return path === channelRoot || (typeof path === "string" && path.startsWith(`${channelRoot}.`));
+}
+
+function isRequestedPluginOutgoingChannelSchemaIssue(
+  issue: { path?: string; message?: string },
+  pluginId: string,
+): boolean {
+  // The currently installed plugin validates channels.<id> before install.
+  // Recovery must ignore that outgoing schema so an upgrade can replace it;
+  // dropping this check deadlocks operators who already wrote the new shape.
+  return (
+    isRequestedPluginChannelPath(issue.path, pluginId) &&
+    typeof issue.message === "string" &&
+    issue.message.startsWith(`invalid config for plugin ${pluginId}:`)
+  );
+}
+
 function isAllowedPluginRecoveryIssue(
   issue: { path?: string; message?: string },
   request: PluginInstallRequestContext,
@@ -87,6 +106,7 @@ function isAllowedPluginRecoveryIssue(
   return (
     (issue.path === `channels.${pluginId}` &&
       issue.message === `unknown channel id: ${pluginId}`) ||
+    isRequestedPluginOutgoingChannelSchemaIssue(issue, pluginId) ||
     isOwnedMissingPluginLoadPathIssue(issue, ownedLoadPaths) ||
     (issue.path === `plugins.entries.${pluginId}` &&
       typeof issue.message === "string" &&
