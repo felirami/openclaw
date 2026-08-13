@@ -1265,7 +1265,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           ? mergeStreamingFinalText(
               streamText,
               reply.text,
-              payload.isError === true && hasStreamingFinalText,
+              payload.isError !== true || hasStreamingFinalText,
             )
           : reply.text;
       const hasText = reply.hasText;
