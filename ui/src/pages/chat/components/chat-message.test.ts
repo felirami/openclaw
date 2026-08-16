@@ -903,10 +903,16 @@ describe("grouped chat rendering", () => {
 
   it("collapses long user messages and toggles their disclosure state", () => {
     const container = document.createElement("div");
-    const markdownContent = Array.from({ length: 13 }, (_, index) => `Prompt line ${index}`).join(
-      "\n",
-    );
+    const collapsedLines = [
+      "Inspect AGENTS.md:188 first.",
+      ...Array.from({ length: 11 }, (_, index) => `Prompt line ${index}`),
+    ];
+    const expandedTail = "Full prompt tail after the disclosure boundary.";
+    const markdownContent = [...collapsedLines, expandedTail].join("\n");
     const onToggleUserMessageExpanded = vi.fn();
+    markdownRenderMock
+      .mockImplementationOnce(renderMarkdownHtml)
+      .mockImplementationOnce(renderMarkdownHtml);
 
     renderGroupedMessage(
       container,
@@ -920,10 +926,17 @@ describe("grouped chat rendering", () => {
 
     const disclosure = expectElement(container, ".chat-message-disclosure", HTMLDivElement);
     const toggle = expectElement(disclosure, ".chat-message-disclosure__toggle", HTMLButtonElement);
+    const collapsedText = expectElement(disclosure, ".chat-text", HTMLDivElement);
+    const collapsedFileLink = expectElement(
+      collapsedText,
+      "a.markdown-file-link",
+      HTMLAnchorElement,
+    );
     expect(disclosure.classList.contains("is-expanded")).toBe(false);
-    expect(
-      expectElement(disclosure, ".chat-message-disclosure__preview", HTMLDivElement).textContent,
-    ).toBe(Array.from({ length: 12 }, (_, index) => `Prompt line ${index}`).join("\n") + "…");
+    expect(collapsedText.textContent?.trim()).toBe(`${collapsedLines.join("\n")}…`);
+    expect(collapsedText.textContent).not.toContain(expandedTail);
+    expect(collapsedFileLink.dataset.filePath).toBe("AGENTS.md");
+    expect(collapsedFileLink.dataset.fileLine).toBe("188");
     expect(toggle.textContent?.trim()).toBe("Show more");
     expect(toggle.getAttribute("aria-expanded")).toBe("false");
 
@@ -946,8 +959,12 @@ describe("grouped chat rendering", () => {
       ".chat-message-disclosure__toggle",
       HTMLButtonElement,
     );
+    const expandedText = expectElement(expandedDisclosure, ".chat-text", HTMLDivElement);
+    const expandedFileLink = expectElement(expandedText, "a.markdown-file-link", HTMLAnchorElement);
     expect(expandedDisclosure.classList.contains("is-expanded")).toBe(true);
-    expect(expandedDisclosure.querySelector(".chat-message-disclosure__preview")).toBeNull();
+    expect(expandedText.textContent).toContain(expandedTail);
+    expect(expandedFileLink.dataset.filePath).toBe("AGENTS.md");
+    expect(expandedFileLink.dataset.fileLine).toBe("188");
     expect(collapseToggle.textContent?.trim()).toBe("Show less");
     expect(collapseToggle.getAttribute("aria-expanded")).toBe("true");
   });
@@ -963,9 +980,9 @@ describe("grouped chat rendering", () => {
       { onToggleUserMessageExpanded: vi.fn() },
     );
 
-    expect(
-      expectElement(container, ".chat-message-disclosure__preview", HTMLDivElement).textContent,
-    ).toBe(`${"a".repeat(699)}…`);
+    expect(expectElement(container, ".chat-text", HTMLDivElement).textContent?.trim()).toBe(
+      `${"a".repeat(699)}…`,
+    );
   });
 
   it("does not add prompt disclosure controls to short user or assistant messages", () => {
@@ -5292,7 +5309,6 @@ describe("grouped chat rendering", () => {
   });
 
   function renderAssistantDisclosureActionFixture(
-    expanded: boolean,
     options: Partial<RenderMessageGroupOptions> = {},
   ) {
     const container = document.createElement("div");
@@ -5310,7 +5326,6 @@ describe("grouped chat rendering", () => {
         loadFullAssistantMessage: async () => null,
         getAssistantMessageExpansion: () => ({
           status: "loaded",
-          expanded,
           markdown: fullMessage,
           revision: 1,
         }),
@@ -5321,13 +5336,10 @@ describe("grouped chat rendering", () => {
     return { container, fullMessage, preview };
   }
 
-  it.each([
-    { expanded: false, label: "previously collapsed" },
-    { expanded: true, label: "expanded" },
-  ])("copies the full $label assistant message", async ({ expanded }) => {
+  it("copies the full loaded assistant message", async () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     vi.stubGlobal("navigator", { clipboard: { writeText } } as unknown as Navigator);
-    const { container, fullMessage } = renderAssistantDisclosureActionFixture(expanded);
+    const { container, fullMessage } = renderAssistantDisclosureActionFixture();
 
     expect(container.querySelector(".chat-text")?.textContent).toContain(fullMessage);
     expect(container.querySelector(".chat-message-disclosure__toggle")).toBeNull();
@@ -5338,12 +5350,9 @@ describe("grouped chat rendering", () => {
     await vi.waitFor(() => expect(writeText).toHaveBeenCalledWith(fullMessage));
   });
 
-  it.each([
-    { expanded: false, label: "previously collapsed" },
-    { expanded: true, label: "expanded" },
-  ])("replies with the full $label assistant message", ({ expanded }) => {
+  it("replies with the full loaded assistant message", () => {
     const onReply = vi.fn();
-    const { container, fullMessage } = renderAssistantDisclosureActionFixture(expanded, {
+    const { container, fullMessage } = renderAssistantDisclosureActionFixture({
       onReply,
     });
 
@@ -5363,7 +5372,7 @@ describe("grouped chat rendering", () => {
     "keeps the transcript preview in %s assistant-message actions",
     (status) => {
       const onReply = vi.fn();
-      const { container, preview } = renderAssistantDisclosureActionFixture(false, {
+      const { container, preview } = renderAssistantDisclosureActionFixture({
         onReply,
         getAssistantMessageExpansion: () => ({ status, revision: 1 }),
       });
@@ -5380,17 +5389,16 @@ describe("grouped chat rendering", () => {
     },
   );
 
-  it("keeps expanded assistant thinking private while bounding reply context", async () => {
+  it("keeps loaded assistant thinking private while bounding reply context", async () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     vi.stubGlobal("navigator", { clipboard: { writeText } } as unknown as Navigator);
     const onReply = vi.fn();
-    const visibleMessage = `${"a".repeat(499)}😀 full expanded answer`;
-    const { container } = renderAssistantDisclosureActionFixture(true, {
+    const visibleMessage = `${"a".repeat(499)}😀 full loaded answer`;
+    const { container } = renderAssistantDisclosureActionFixture({
       onReply,
       getAssistantMessageExpansion: () => ({
         status: "loaded",
-        expanded: true,
-        markdown: `<thinking>private expanded reasoning</thinking>${visibleMessage}`,
+        markdown: `<thinking>private loaded reasoning</thinking>${visibleMessage}`,
         revision: 1,
       }),
     });
@@ -5415,12 +5423,11 @@ describe("grouped chat rendering", () => {
     const onReply = vi.fn();
     const onToggleAssistantMessageExpanded = vi.fn();
     const privateThinking = "private expanded reasoning only";
-    const { container, preview } = renderAssistantDisclosureActionFixture(false, {
+    const { container, preview } = renderAssistantDisclosureActionFixture({
       onReply,
       onToggleAssistantMessageExpanded,
       getAssistantMessageExpansion: () => ({
         status: "loaded",
-        expanded: false,
         markdown: `<thinking>${privateThinking}</thinking>`,
         revision: 1,
       }),

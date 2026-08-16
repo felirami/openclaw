@@ -8,8 +8,8 @@ import type {
   Context,
   EventStream,
   ToolResultMessage,
+  EventStream as SourceEventStream,
 } from "@openclaw/llm-core";
-import type { EventStream as SourceEventStream } from "@openclaw/llm-core";
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { TranscriptNotContinuableError } from "./errors.js";
@@ -34,8 +34,8 @@ import {
   isTurnHandoffAbort,
   normalizeCoreContextMessages,
 } from "./turn-interruption.js";
-import type { ToolResultContentSource } from "./types.js";
 import type {
+  ToolResultContentSource,
   AgentContext,
   AgentEvent,
   AgentLoopConfig,
@@ -1873,8 +1873,17 @@ type TurnTaintMetadata = {
 };
 
 function readTurnTaintMetadata(message: AgentMessage): TurnTaintMetadata | undefined {
-  const metadata = (message as unknown as Record<string, unknown>)["__openclaw"];
-  return asOptionalRecord(metadata) as TurnTaintMetadata | undefined;
+  const metadata = Reflect.get(message, "__openclaw");
+  const record = asOptionalRecord(metadata);
+  if (!record) {
+    return undefined;
+  }
+  return {
+    ...(record.resultContentSource === "network"
+      ? { resultContentSource: record.resultContentSource }
+      : {}),
+    ...(record.turnTainted === true ? { turnTainted: true } : {}),
+  };
 }
 
 function toolResultTaintsTurn(message: ToolResultMessage): boolean {
@@ -1898,10 +1907,11 @@ function withAssistantTurnTaint(message: AssistantMessage, tainted: boolean): As
   if (!tainted) {
     return message;
   }
-  return {
+  const taintedMessage = {
     ...message,
     __openclaw: { ...readTurnTaintMetadata(message), turnTainted: true },
-  } as unknown as AssistantMessage;
+  } satisfies AssistantMessage & { __openclaw: TurnTaintMetadata };
+  return taintedMessage;
 }
 
 function withToolResultContentSource(
